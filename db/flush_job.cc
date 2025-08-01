@@ -188,8 +188,9 @@ void FlushJob::PickMemTable() {
   uint64_t max_next_log_number = 0;
 
   // Save the contents of the earliest memtable as a new Table
+  const MutableCFOptions* cfd_options = cfd_->GetLatestMutableCFOptions();
   cfd_->imm()->PickMemtablesToFlush(max_memtable_id_, &mems_,
-                                    &max_next_log_number);
+                                    &max_next_log_number, cfd_options);
   if (mems_.empty()) {
     return;
   }

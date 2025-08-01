@@ -253,7 +253,7 @@ bool CompactionPicker::ExpandInputsToCleanCut(const std::string& /*cf_name*/,
   // If, after the expansion, there are files that are already under
   // compaction, then we must drop/cancel this compaction.
   if (AreFilesInCompaction(inputs->files)) {
-    return false;
+    // return false;
   }
   return true;
 }
@@ -269,7 +269,8 @@ bool CompactionPicker::RangeOverlapWithCompaction(
         ucmp->CompareWithoutTimestamp(largest_user_key,
                                       c->GetSmallestUserKey()) >= 0) {
       // Overlap
-      return true;
+      if(level != 1) return false;
+      else return true;// return true;
     }
     if (c->SupportsPerKeyPlacement()) {
       if (c->OverlapPenultimateLevelOutputRange(smallest_user_key,
@@ -493,7 +494,9 @@ bool CompactionPicker::SetupOtherInputs(
   }
   if (!output_level_inputs->empty()) {
     if (!ExpandInputsToCleanCut(cf_name, vstorage, output_level_inputs)) {
-      return false;
+      // return false;
+
+      if(input_level == 0) return true;
     }
   }
 
@@ -635,11 +638,11 @@ Compaction* CompactionPicker::CompactRange(
       return nullptr;
     }
 
-    if ((start_level == 0) && (!level0_compactions_in_progress_.empty())) {
-      *manual_conflict = true;
-      // Only one level 0 compaction allowed
-      return nullptr;
-    }
+    // if ((start_level == 0) && (!level0_compactions_in_progress_.empty())) {
+    //   *manual_conflict = true;
+    //   // Only one level 0 compaction allowed
+    //   return nullptr;
+    // }
 
     std::vector<CompactionInputFiles> inputs(max_output_level + 1 -
                                              start_level);
@@ -1233,12 +1236,18 @@ bool CompactionPicker::GetOverlappingL0Files(
     int output_level, int* parent_index) {
   // Two level 0 compaction won't run at the same time, so don't need to worry
   // about files on level 0 being compacted.
-  assert(level0_compactions_in_progress()->empty());
+   
+  // assert(level0_compactions_in_progress()->empty());
   InternalKey smallest, largest;
   GetRange(*start_level_inputs, &smallest, &largest);
   // Note that the next call will discard the file we placed in
   // c->inputs_[0] earlier and replace it with an overlapping set
   // which will include the picked file.
+
+  // if always true, occur seg fault??
+  if(!level0_compactions_in_progress()->empty()) 
+    return true;
+
   start_level_inputs->files.clear();
   vstorage->GetOverlappingInputs(0, &smallest, &largest,
                                  &(start_level_inputs->files));

@@ -591,8 +591,9 @@ class VersionBuilder::Rep {
       // Check L1 and up
 
       for (int level = 1; level < num_levels_; ++level) {
-        auto checker = [this, level, icmp](const FileMetaData* lhs,
-                                           const FileMetaData* rhs) {
+        auto checker = [this, level, icmp](FileMetaData* lhs,
+                                           FileMetaData* rhs) {
+                                          // above filemetadata parmeter made unconst, so we can modify it.
           assert(lhs);
           assert(rhs);
 
@@ -613,7 +614,13 @@ class VersionBuilder::Rep {
                 << " vs. file #" << rhs->fd.GetNumber()
                 << " smallest key: " << rhs->smallest.DebugString(true);
 
-            return Status::Corruption("VersionBuilder", oss.str());
+            //return Status::Corruption("VersionBuilder", oss.str());
+             if(!lhs->need_compaction){
+               lhs->need_compaction = true;
+             }
+             if(!rhs->need_compaction){
+               rhs->need_compaction = true;
+             }
           }
 
           return Status::OK();

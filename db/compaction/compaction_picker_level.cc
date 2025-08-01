@@ -100,7 +100,7 @@ class LevelCompactionBuilder {
   bool PickFileToCompact();
 
   // Return true if a L0 trivial move is picked up.
-  bool TryPickL0TrivialMove();
+  [[maybe_unused]] bool TryPickL0TrivialMove();
 
   // For L0->L0, picks the longest span of files that aren't currently
   // undergoing compaction for which work-per-deleted-file decreases. The span
@@ -120,7 +120,7 @@ class LevelCompactionBuilder {
   // Returns true iff an intra-L0 compaction is picked.
   // `start_level_inputs_` and `output_level_` will be updated accordingly if
   // a compaction is picked.
-  bool PickSizeBasedIntraL0Compaction();
+  [[maybe_unused]] bool PickSizeBasedIntraL0Compaction();
 
   // Return true if TrivialMove is extended. `start_index` is the index of
   // the initial file picked, which should already be in `start_level_inputs_`.
@@ -232,7 +232,8 @@ void LevelCompactionBuilder::SetupInitialFiles() {
         // didn't find the compaction, clear the inputs
         start_level_inputs_.clear();
         if (start_level_ == 0) {
-          skipped_l0_to_base = true;
+          // skipped_l0_to_base = true;
+          
           // L0->base_level may be blocked due to ongoing L0->base_level
           // compactions. It may also be blocked by an ongoing compaction from
           // base_level downwards.
@@ -240,10 +241,12 @@ void LevelCompactionBuilder::SetupInitialFiles() {
           // In these cases, to reduce L0 file count and thus reduce likelihood
           // of write stalls, we can attempt compacting a span of files within
           // L0.
-          if (PickIntraL0Compaction()) {
-            output_level_ = 0;
-            compaction_reason_ = CompactionReason::kLevelL0FilesNum;
-            break;
+          if(mutable_cf_options_.disable_intra_l0_compaction == false){
+            if (PickIntraL0Compaction()) {
+              output_level_ = 0;
+              compaction_reason_ = CompactionReason::kLevelL0FilesNum;
+              break;
+            }
           }
         }
       }
@@ -519,17 +522,22 @@ Compaction* LevelCompactionBuilder::PickCompaction() {
   // If it is a L0 -> base level compaction, we need to set up other L0
   // files if needed.
   if (!SetupOtherL0FilesIfNeeded()) {
-    return nullptr;
+    // return nullptr;
+    if(start_level_ != 0) return nullptr;
   }
 
   // Pick files in the output level and expand more files in the start level
   // if needed.
   if (!SetupOtherInputsIfNeeded()) {
-    return nullptr;
+   if(start_level_ != 0) return nullptr;
+   // return nullptr;
   }
 
   // Form a compaction object containing the files we picked.
   Compaction* c = GetCompaction();
+
+  if(start_level_inputs_.size() + output_level_inputs_.size() <= 1) 
+    return nullptr;
 
   TEST_SYNC_POINT_CALLBACK("LevelCompactionPicker::PickCompaction:Return", c);
 
@@ -544,6 +552,11 @@ Compaction* LevelCompactionBuilder::GetCompaction() {
   // compaction_inputs_[0].size() == 1 since SetupOtherL0FilesIfNeeded() did not
   // pull in more L0s.
   assert(!compaction_inputs_.empty());
+
+  if(compaction_inputs_.size() == 0){
+     return nullptr;
+  }
+
   bool l0_files_might_overlap =
       start_level_ == 0 && !is_l0_trivial_move_ &&
       (compaction_inputs_.size() > 1 || compaction_inputs_[0].size() > 1);
@@ -792,26 +805,30 @@ bool LevelCompactionBuilder::PickFileToCompact() {
   // than one concurrent compactions at this level. This
   // could be made better by looking at key-ranges that are
   // being compacted at level 0.
-  if (start_level_ == 0 &&
-      !compaction_picker_->level0_compactions_in_progress()->empty()) {
-    if (PickSizeBasedIntraL0Compaction()) {
-      return true;
-    }
-    TEST_SYNC_POINT("LevelCompactionPicker::PickCompactionBySize:0");
-    return false;
-  }
+
+  // This is for disable intra-L0 compaction and preventing return false.
+  // if (start_level_ == 0 &&
+  //    !compaction_picker_->level0_compactions_in_progress()->empty()) {
+  //   if (PickSizeBasedIntraL0Compaction()) {
+  //     return true;
+  //   }
+  //   TEST_SYNC_POINT("LevelCompactionPicker::PickCompactionBySize:0");
+  //   return false;
+  // }
 
   start_level_inputs_.clear();
   start_level_inputs_.level = start_level_;
 
   assert(start_level_ >= 0);
 
-  if (TryPickL0TrivialMove()) {
-    return true;
-  }
-  if (start_level_ == 0 && PickSizeBasedIntraL0Compaction()) {
-    return true;
-  }
+  // if (TryPickL0TrivialMove()) {
+  //  return true;
+  //}
+  
+  // Prevent intra-L0 compaction.
+  // if (start_level_ == 0 && PickSizeBasedIntraL0Compaction()) {
+  //  return true;
+  //}
 
   const std::vector<FileMetaData*>& level_files =
       vstorage_->LevelFiles(start_level_);
@@ -851,13 +868,17 @@ bool LevelCompactionBuilder::PickFileToCompact() {
                                                  output_level_))) {
       // A locked (pending compaction) input-level file was pulled in due to
       // user-key overlap.
-      start_level_inputs_.clear();
+
+      // start_level_inputs_.clear();
 
       if (ioptions_.compaction_pri == kRoundRobin) {
         return false;
       }
       continue;
     }
+
+    if(start_level_inputs_.size() <= 0) 
+      return start_level_inputs_.size() > 0;
 
     // Now that input level is fully expanded, we check whether any output
     // files are locked due to pending compaction.

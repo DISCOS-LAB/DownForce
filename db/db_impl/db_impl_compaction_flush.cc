@@ -115,6 +115,9 @@ bool DBImpl::ShouldRescheduleFlushRequestToRetainUDT(
       ColumnFamilyData::GetWriteStallConditionAndCause(
           cfd->GetUnflushedMemTableCountForWriteStallCheck(),
           /*num_l0_files=*/0,
+          // l0 bytes
+          0,
+          //-//
           /*num_compaction_needed_bytes=*/0, mutable_cf_options,
           *cfd->ioptions())
           .first;
@@ -2699,6 +2702,7 @@ Status DBImpl::WaitUntilFlushWouldNotStallWrites(ColumnFamilyData* cfd,
           ColumnFamilyData::GetWriteStallConditionAndCause(
               cfd->GetUnflushedMemTableCountForWriteStallCheck(),
               vstorage->l0_delay_trigger_count() + 1,
+              (vstorage->l0_delay_trigger_count() + 1) * mutable_cf_options.write_buffer_size,
               vstorage->estimated_compaction_needed_bytes(), mutable_cf_options,
               *cfd->ioptions())
               .first;

@@ -90,6 +90,7 @@ struct SstFileMetaData : public FileStorageInfo {
         largestkey(_largestkey),
         num_reads_sampled(_num_reads_sampled),
         being_compacted(_being_compacted),
+        need_compaction(false),
         num_entries(0),
         num_deletions(0),
         oldest_blob_file_number(_oldest_blob_file_number),
@@ -126,6 +127,7 @@ struct SstFileMetaData : public FileStorageInfo {
   bool being_compacted =
       false;  // true if the file is currently being compacted.
 
+  bool need_compaction = false; 
   uint64_t num_entries = 0;
   uint64_t num_deletions = 0;
 
