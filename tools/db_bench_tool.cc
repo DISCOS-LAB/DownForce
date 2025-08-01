@@ -6,7 +6,22 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
-
+// ----- YCSB Workload Integration History -----
+//
+// Initial YCSB workload porting to db_bench was likely done by the contributor 
+// associated with the GitHub repository: https://github.com/supermt/FEAT_7.11 (unknown exact identity).
+//
+// Subsequent porting and modifications by:
+// Hongsu Byun and Honghyeon Yoo
+//
+// Description:
+// Integration and enhancement of YCSB benchmark workload in db_bench based on
+// the existing porting by the aforementioned contributor.
+//
+// Note:
+// The original license and copyright notices must be preserved.
+//
+// ----------------------------------------------------
 #ifdef GFLAGS
 #ifdef NUMA
 #include <numa.h>
@@ -91,6 +106,13 @@
 #include "utilities/merge_operators/bytesxor.h"
 #include "utilities/merge_operators/sortlist.h"
 #include "utilities/persistent_cache/block_cache_tier.h"
+#include "ycsbcore/client.h"
+#include "ycsbcore/core_workload.h"
+#include "ycsbcore/countdown_latch.h"
+#include "ycsbcore/db_factory.h"
+#include "ycsbcore/measurements.h"
+#include "ycsbcore/timer.h"
+#include "ycsbcore/utils.h"
 
 #ifdef MEMKIND
 #include "memory/memkind_kmem_allocator.h"
@@ -947,6 +969,13 @@ DEFINE_bool(optimize_filters_for_hits,
             "a value. For now this doesn't create bloom filters for the max "
             "level of the LSM to reduce metadata that should fit in RAM. ");
 
+DEFINE_int64(load_duration, 0, "The loading duration of YCSB");
+DEFINE_string(ycsb_workload, "", "The workload of YCSB");
+DEFINE_int64(ycsb_request_speed, 100, "The request speed of YCSB, in MB/s");
+DEFINE_int64(load_num, 100000, "Num of operations in loading phrase");
+DEFINE_int64(running_num, 100000, "Num of operations in running phrase");
+DEFINE_int64(random_fill_average, 150,
+             "average inputs rate of background write operations");
 DEFINE_bool(paranoid_checks, ROCKSDB_NAMESPACE::Options().paranoid_checks,
             "RocksDB will aggressively check consistency of the data.");
 
@@ -1075,7 +1104,6 @@ DEFINE_string(
 static enum ROCKSDB_NAMESPACE::CompressionType
     FLAGS_blob_db_compression_type_e = ROCKSDB_NAMESPACE::kSnappyCompression;
 
-
 // Integrated BlobDB options
 DEFINE_bool(
     enable_blob_files,
@@ -1146,7 +1174,6 @@ DEFINE_int32(prepopulate_blob_cache, 0,
              "[Integrated BlobDB] Pre-populate hot/warm blobs in blob cache. 0 "
              "to disable and 1 to insert during flush.");
 
-
 // Secondary DB instance Options
 DEFINE_bool(use_secondary_db, false,
             "Open a RocksDB secondary instance. A primary instance can be "
@@ -1171,7 +1198,6 @@ DEFINE_bool(report_bg_io_stats, false,
 
 DEFINE_bool(use_stderr_info_logger, false,
             "Write info logs to stderr instead of to LOG file. ");
-
 
 DEFINE_string(trace_file, "", "Trace workload to a file. ");
 
@@ -1811,6 +1837,18 @@ DEFINE_bool(build_info, false,
 DEFINE_bool(track_and_verify_wals_in_manifest, false,
             "If true, enable WAL tracking in the MANIFEST");
 
+DEFINE_bool(in_memory_merge, true,
+            "If true, enable In-Memory merge in flushing (RocksDB Default).");
+
+DEFINE_bool(monitor_each_level_sst, false,
+            "If true, enable monitoring SST files and size an each level per stats interval.");
+
+DEFINE_bool(disable_intra_l0_compaction, false,
+            "If true, disable intra L0 compaction. RocksDB Default is false(i.e, intra L0 compaction is enabled and trigger number of SST is 4).");
+
+DEFINE_bool(l0_size_based_stop, false,
+            "If true, occur write stall based L0 total size. RocksDB Default is false(i.e, Write stall occurs based number of SST files).");
+
 namespace ROCKSDB_NAMESPACE {
 namespace {
 static Status CreateMemTableRepFactory(
@@ -2001,11 +2039,7 @@ struct DBWithColumnFamilies {
   std::vector<int> cfh_idx_to_prob;  // ith index holds probability of operating
                                      // on cfh[i].
 
-  DBWithColumnFamilies()
-      : db(nullptr)
-        ,
-        opt_txn_db(nullptr)
-  {
+  DBWithColumnFamilies() : db(nullptr), opt_txn_db(nullptr) {
     cfh.clear();
     num_created = 0;
     num_hot = 0;
@@ -2017,8 +2051,7 @@ struct DBWithColumnFamilies {
         opt_txn_db(other.opt_txn_db),
         num_created(other.num_created.load()),
         num_hot(other.num_hot),
-        cfh_idx_to_prob(other.cfh_idx_to_prob) {
-  }
+        cfh_idx_to_prob(other.cfh_idx_to_prob) {}
 
   void DeleteDBs() {
     std::for_each(cfh.begin(), cfh.end(),
@@ -2379,6 +2412,12 @@ class Stats {
                   done_ / ((now - start_) / 1000000.0),
                   (now - last_report_finish_) / 1000000.0,
                   (now - start_) / 1000000.0);
+
+                  if(FLAGS_monitor_each_level_sst){
+                    std::string level_stats;
+                    db->GetProperty("rocksdb.levelstats", &level_stats);
+                    std::cout << level_stats << std::endl;
+                  }
 
           if (id_ == 0 && FLAGS_stats_per_interval) {
             std::string stats;
@@ -3631,6 +3670,19 @@ class Benchmark {
         method = &Benchmark::ApproximateMemtableStats;
       } else if (name == "mixgraph") {
         method = &Benchmark::MixGraph;
+      } else if (name == "ycsb") {
+        fresh_db = true;
+        method = &Benchmark::YCSBIntegrate;
+      } else if (name == "ycsb_load") {
+        fresh_db = true;
+        method = &Benchmark::YCSBLoader;
+      } else if (name == "ycsb_run") {
+        fresh_db = false;
+        method = &Benchmark::YCSBRunner;
+      } else if (name == "bgYCSBrun") {
+        num_threads++;
+        fresh_db = true;
+        method = &Benchmark::BGYCSBRun;
       } else if (name == "readmissing") {
         ++key_size_;
         method = &Benchmark::ReadRandom;
@@ -4325,6 +4377,10 @@ class Benchmark {
     options.max_bytes_for_level_multiplier =
         FLAGS_max_bytes_for_level_multiplier;
     options.uncache_aggressiveness = FLAGS_uncache_aggressiveness;
+    options.in_memory_merge = FLAGS_in_memory_merge;
+    options.disable_intra_l0_compaction = FLAGS_disable_intra_l0_compaction;
+    options.l0_size_based_stop = FLAGS_l0_size_based_stop;
+
     Status s =
         CreateMemTableRepFactory(config_options, &options.memtable_factory);
     if (!s.ok()) {
@@ -5070,6 +5126,165 @@ class Benchmark {
 
   void WriteUniqueRandom(ThreadState* thread) {
     DoWrite(thread, UNIQUE_RANDOM);
+  }
+  void YCSBWorking(ThreadState* thread, ycsbc::CoreWorkload* workload, int load,
+                   int run) {
+    int remain_loading = FLAGS_load_num;
+    int remain_running = FLAGS_running_num;
+    const int test_duration = FLAGS_duration;
+    int64_t ops_per_stage = 1;
+    // load first, then run
+    Duration loading_duration(FLAGS_load_duration, remain_loading,
+                              ops_per_stage);
+    Duration running_duration(test_duration, remain_running, ops_per_stage);
+    int stage = 0;
+    //    WriteBatch batch;
+    Status s;
+    RandomGenerator gen;
+    int64_t bytes = 0;
+    Duration duration = loading_duration;
+    rocksdb::ReadOptions r_op;
+    rocksdb::WriteOptions w_op;
+    if (load) {
+      while (!duration.Done(entries_per_batch_)) {
+        DB* db = SelectDB(thread);
+        if (duration.GetStage() != stage) {
+          stage = duration.GetStage();
+          if (db_.db != nullptr) {
+            db_.CreateNewCf(open_options_, stage);
+          } else {
+            for (auto& input_db : multi_dbs_) {
+              input_db.CreateNewCf(open_options_, stage);
+            }
+          }
+        }
+        std::string key = workload->BuildKeyName();
+        Slice val = gen.Generate();
+        db_.db->Put(w_op, key, val);
+        int64_t batch_bytes = 0;
+        for (int64_t j = 0; j < entries_per_batch_; j++) {
+          batch_bytes += val.size() + key.size();
+          bytes += val.size() + key.size();
+        }
+        if (thread->shared->write_rate_limiter.get() != nullptr) {
+          thread->shared->write_rate_limiter->Request(
+              batch_bytes, Env::IO_HIGH, nullptr /* stats */,
+              RateLimiter::OpType::kWrite);
+          thread->stats.ResetLastOpTime();
+        }
+        thread->stats.FinishedOps(nullptr, db, entries_per_batch_, kWrite);
+      }
+      thread->stats.AddBytes(bytes);
+    }
+    if (run) {
+      duration = running_duration;
+      Status op_status;
+      int read_count = 0;
+      int found_count = 0;
+      int blind_updates = 0;
+      while (!duration.Done(1)) {
+        if (duration.GetStage() != stage) {
+          stage = duration.GetStage();
+          if (db_.db != nullptr) {
+            db_.CreateNewCf(open_options_, stage);
+          } else {
+            for (auto& db : multi_dbs_) {
+              db.CreateNewCf(open_options_, stage);
+            }
+          }
+        }
+        std::string data;
+        uint64_t key_num = workload->NextTransactionKeyNum();
+        const std::string key = workload->BuildKeyName(key_num);
+        DB* db = SelectDB(thread);
+        switch (workload->NextOp()) {
+          case ycsbc::READ: {
+            op_status = db_.db->Get(r_op, key, &data);
+            if (op_status.ok()) {
+              found_count++;
+              bytes += key.size() + data.size();
+            }
+            read_count++;
+            thread->stats.FinishedOps(nullptr, db, entries_per_batch_, kRead);
+          } break;
+          case ycsbc::UPDATE: {
+            Slice val = gen.Generate();
+            // In rocksdb, update is just another put operation.
+            op_status = db_.db->Put(w_op, key, val);
+            thread->stats.FinishedOps(nullptr, db, entries_per_batch_, kUpdate);
+          } break;
+          case ycsbc::INSERT: {
+            Slice val = gen.Generate();
+            // In rocksdb, update is just another put operation.
+            op_status = db_.db->Put(w_op, key, val);
+            thread->stats.FinishedOps(nullptr, db, entries_per_batch_, kWrite);
+          } break;
+          case ycsbc::SCAN: {
+            Iterator* db_iter = db_.db->NewIterator(rocksdb::ReadOptions());
+            db_iter->Seek(key);
+            int len = workload->scan_len_chooser_->Next();
+            for (int i = 0; db_iter->Valid() && i < len; i++) {
+              data = db_iter->value().ToString();
+              db_iter->Next();
+            }
+            thread->stats.FinishedOps(nullptr, db, entries_per_batch_, kSeek);
+            delete db_iter;
+          } break;
+          case ycsbc::READMODIFYWRITE: {
+            op_status = db_.db->Get(r_op, key, &data);
+            read_count++;
+            if (op_status.IsNotFound()) {
+              blind_updates++;
+            }
+            Slice val = gen.Generate();
+            op_status = db_.db->Put(w_op, key, val);
+            thread->stats.FinishedOps(nullptr, db, entries_per_batch_, kUpdate);
+          } break;
+          case ycsbc::DELETE: {
+            op_status = db_.db->Delete(w_op, key);
+            thread->stats.FinishedOps(nullptr, db, entries_per_batch_, kDelete);
+          } break;
+          case ycsbc::MAXOPTYPE:
+            throw ycsbc::utils::Exception(
+                "Operation request is not recognized!");
+        }
+        thread->stats.AddBytes(bytes);
+      }
+      std::cout << "found count / read count " << found_count << " / "
+                << read_count << std::endl;
+    }
+  }
+  void InitWorkload(ycsbc::CoreWorkload& wl, ycsbc::utils::Properties& props) {
+    if (!FLAGS_ycsb_workload.empty()) {
+      std::ifstream input(FLAGS_ycsb_workload);
+      props.Load(input);
+    }
+    props.SetProperty(ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY,
+                      std::to_string(FLAGS_load_num));
+    props.SetProperty(ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY,
+                      std::to_string(FLAGS_running_num));
+    wl.Init(props);
+  }
+  void YCSBLoader(ThreadState* thread) {
+    ycsbc::CoreWorkload wl;
+    ycsbc::utils::Properties props;
+    InitWorkload(wl, props);
+    YCSBWorking(thread, &wl, true, false);
+  }
+  void YCSBRunner(ThreadState* thread) {
+    ycsbc::CoreWorkload wl;
+    ycsbc::utils::Properties props;
+    InitWorkload(wl, props);
+    YCSBWorking(thread, &wl, false, true);
+  }
+  void YCSBIntegrate(ThreadState* thread) {
+    ycsbc::CoreWorkload wl;
+    ycsbc::utils::Properties props;
+    InitWorkload(wl, props);
+    YCSBWorking(thread, &wl, true, true);
+  }
+  void BGYCSBRun(ThreadState* thread) {
+    YCSBRunner(thread);
   }
 
   class KeyGenerator {
@@ -7095,7 +7310,8 @@ class Benchmark {
       GenerateKeyFromInt(thread->rand.Next() % FLAGS_num, FLAGS_num, &key);
       Status s;
 
-      Slice val = gen.Generate();
+      //Slice val = gen.Generate(); 
+      Slice val = gen.Generate(FLAGS_value_size);
       Slice ts;
       if (user_timestamp_size_ > 0) {
         ts = mock_app_clock_->Allocate(ts_guard.get());
@@ -8543,7 +8759,6 @@ class Benchmark {
     }
   }
 
-
   void Replay(ThreadState* thread) {
     if (db_.db != nullptr) {
       Replay(thread, &db_);
@@ -8631,7 +8846,6 @@ class Benchmark {
     assert(s.ok());
     delete backup_engine;
   }
-
 };
 
 int db_bench_tool(int argc, char** argv) {
