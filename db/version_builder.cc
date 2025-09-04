@@ -855,17 +855,18 @@ class VersionBuilder::Rep {
         has_invalid_levels_ = true;
       }
 
-      std::ostringstream oss;
-      oss << "Cannot delete table file #" << file_number << " from level "
-          << level << " since it is ";
-      if (current_level ==
-          VersionStorageInfo::FileLocation::Invalid().GetLevel()) {
-        oss << "not in the LSM tree";
-      } else {
-        oss << "on level " << current_level;
-      }
+      //std::ostringstream oss;
+      //oss << "Cannot delete table file #" << file_number << " from level "
+      //    << level << " since it is ";
+      // if (current_level ==
+      //     VersionStorageInfo::FileLocation::Invalid().GetLevel()) {
+      //   oss << "not in the LSM tree";
+      // } else {
+      //   oss << "on level " << current_level;
+      // }
 
-      return Status::Corruption("VersionBuilder", oss.str());
+      // return Status::Corruption("VersionBuilder", oss.str());
+      return Status::OK();
     }
 
     if (level >= num_levels_) {

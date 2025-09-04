@@ -173,7 +173,11 @@ struct MutableCFOptions {
         memtable_max_range_deletions(options.memtable_max_range_deletions),
         bottommost_file_compaction_delay(
             options.bottommost_file_compaction_delay),
-        uncache_aggressiveness(options.uncache_aggressiveness) {
+        uncache_aggressiveness(options.uncache_aggressiveness),
+        in_memory_merge(options.in_memory_merge),
+        disable_intra_l0_compaction(options.disable_intra_l0_compaction),
+        l0_size_based_stop(options.l0_size_based_stop)
+        {
     RefreshDerivedOptions(options.num_levels, options.compaction_style);
   }
 
@@ -332,6 +336,10 @@ struct MutableCFOptions {
   uint32_t memtable_max_range_deletions;
   uint32_t bottommost_file_compaction_delay;
   uint32_t uncache_aggressiveness;
+
+  bool in_memory_merge;
+  bool disable_intra_l0_compaction;
+  bool l0_size_based_stop;
 
   // Derived options
   // Per-level target file size.

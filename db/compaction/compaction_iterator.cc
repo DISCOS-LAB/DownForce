@@ -39,7 +39,8 @@ CompactionIterator::CompactionIterator(
     const std::shared_ptr<Logger> info_log,
     const std::string* full_history_ts_low,
     const SequenceNumber preserve_time_min_seqno,
-    const SequenceNumber preclude_last_level_min_seqno)
+    const SequenceNumber preclude_last_level_min_seqno,
+    bool preserve_seqno)
     : CompactionIterator(
           input, cmp, merge_helper, last_sequence, snapshots, earliest_snapshot,
           earliest_write_conflict_snapshot, job_snapshot, snapshot_checker, env,
@@ -50,7 +51,7 @@ CompactionIterator::CompactionIterator(
               compaction ? new RealCompaction(compaction) : nullptr),
           must_count_input_entries, compaction_filter, shutting_down, info_log,
           full_history_ts_low, preserve_time_min_seqno,
-          preclude_last_level_min_seqno) {}
+          preclude_last_level_min_seqno, preserve_seqno) {}
 
 CompactionIterator::CompactionIterator(
     InternalIterator* input, const Comparator* cmp, MergeHelper* merge_helper,
@@ -69,7 +70,8 @@ CompactionIterator::CompactionIterator(
     const std::shared_ptr<Logger> info_log,
     const std::string* full_history_ts_low,
     const SequenceNumber preserve_time_min_seqno,
-    const SequenceNumber preclude_last_level_min_seqno)
+    const SequenceNumber preclude_last_level_min_seqno,
+    bool preserve_seqno)
     : input_(input, cmp, must_count_input_entries),
       cmp_(cmp),
       merge_helper_(merge_helper),
@@ -111,7 +113,8 @@ CompactionIterator::CompactionIterator(
       cmp_with_history_ts_low_(0),
       level_(compaction_ == nullptr ? 0 : compaction_->level()),
       preserve_time_min_seqno_(preserve_time_min_seqno),
-      preclude_last_level_min_seqno_(preclude_last_level_min_seqno) {
+      preclude_last_level_min_seqno_(preclude_last_level_min_seqno),
+      preserve_seqno_(preserve_seqno) {
   assert(snapshots_ != nullptr);
   assert(preserve_time_min_seqno_ <= preclude_last_level_min_seqno_);
 
@@ -1353,7 +1356,8 @@ void CompactionIterator::PrepareOutput() {
     // Can we do the same for levels above bottom level as long as
     // KeyNotExistsBeyondOutputLevel() return true?
     if (Valid() && compaction_ != nullptr &&
-        !compaction_->allow_ingest_behind() && bottommost_level_ &&
+        // !compaction_->allow_ingest_behind() && bottommost_level_ &&
+        !compaction_->allow_ingest_behind() && // remove bottommost_level_ condition
         DefinitelyInSnapshot(ikey_.sequence, earliest_snapshot_) &&
         ikey_.type != kTypeMerge && current_key_committed_ &&
         !output_to_penultimate_level_ &&
@@ -1376,12 +1380,16 @@ void CompactionIterator::PrepareOutput() {
             validity_info_.rep);
         assert(false);
       }
-      ikey_.sequence = 0;
-      last_key_seq_zeroed_ = true;
-      TEST_SYNC_POINT_CALLBACK("CompactionIterator::PrepareOutput:ZeroingSeq",
-                               &ikey_);
+      if(!preserve_seqno_){  // Check if the sequence number should be preserved
+            ikey_.sequence = 0;
+            last_key_seq_zeroed_ = true;
+            TEST_SYNC_POINT_CALLBACK("CompactionIterator::PrepareOutput:ZeroingSeq",
+                                    &ikey_);
+      }
       if (!timestamp_size_) {
-        current_key_.UpdateInternalKey(0, ikey_.type);
+        // non zero sequence number.
+        // current_key_.UpdateInternalKey(0, ikey_.type);
+        current_key_.UpdateInternalKey(ikey_.sequence, ikey_.type);
       } else if (full_history_ts_low_ && cmp_with_history_ts_low_ < 0) {
         // We can also zero out timestamp for better compression.
         // For the same user key (excluding timestamp), the timestamp-based

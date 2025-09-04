@@ -348,7 +348,8 @@ Compaction::Compaction(
               : EvaluatePenultimateLevel(vstorage, mutable_cf_options_,
                                          immutable_options_, start_level_,
                                          output_level_)) {
-  MarkFilesBeingCompacted(true);
+  // comment out. temporary.
+  // MarkFilesBeingCompacted(true);
   if (is_manual_compaction_) {
     compaction_reason_ = CompactionReason::kManualCompaction;
   }
